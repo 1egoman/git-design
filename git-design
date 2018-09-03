@@ -1,0 +1,186 @@
+#!/bin/bash
+# vim: set syntax=sh :
+set +exo pipefail
+
+compress-json() {
+  for file in "$@"; do
+    local hashsum="$(echo "${file}" | md5sum | awk '{ print $1 }')"
+    echo "  . ${file} (${hashsum})"
+    cat "${file}" | jq -c . > /tmp/git-design$$/${hashsum}
+    mv "/tmp/git-design$$/${hashsum}" "${file}"
+  done
+}
+decompress-json() {
+  for file in "$@"; do
+    local hashsum="$(echo ${file} | md5sum | awk '{ print $1 }')"
+    echo "  . ${file} (${hashsum})"
+    cat "${file}" | jq . > "/tmp/git-design$$/${hashsum}"
+    mv "/tmp/git-design$$/${hashsum}" "${file}"
+  done
+}
+
+unpack() {
+  for n in "$@"; do
+    # If the unpacked versino was passed, map back to the packed one.
+    if echo "$n" | grep 'unpacked/*$' > /dev/null; then
+      n="$(echo $n | sed 's/-unpacked\/*$//g')"
+    fi
+
+    echo " => $n"
+    local filename="$(pwd)/$n"
+    local unpacked_filename="${filename}-unpacked"
+    local file_hashsum="$(echo "${filename}" | md5sum | awk '{ print $1 }')"
+
+    if ! [ -f "${filename}" ]; then
+      echo "  . file ${filename} doesn't exist"
+      continue
+    fi
+
+    if [ "$(cat "${unpacked_filename}/.hashsum" 2> /dev/null)" = "${file_hashsum}" ]; then
+      echo "  . already at latest"
+      continue
+    fi
+
+    case "${filename}" in
+    *.sketch)
+      mkdir -p "${unpacked_filename}" >> /dev/null
+      echo "${file_hashsum}" > "${unpacked_filename}/.hashsum"
+      pushd "${unpacked_filename}" >> /dev/null || exit 1
+      unzip -o "${filename}" >> /dev/null
+
+      # Expand some sketch-specific json files
+      mkdir /tmp/git-design$$
+      decompress-json meta.json user.json pages/*.json
+      rm -rf /tmp/git-design$$
+
+      popd >> /dev/null || exit 1
+      ;;
+
+    *.studio)
+      mkdir -p "${unpacked_filename}" >> /dev/null
+      echo "${file_hashsum}" > "${unpacked_filename}/.hashsum"
+      pushd "${unpacked_filename}" >> /dev/null
+      unzip -o "${filename}" >> /dev/null
+
+      # Expand some studio-specific json files
+      mkdir /tmp/git-design$$
+      decompress-json metadata.json settings.json snapshot.json
+      rm -rf /tmp/git-design$$
+
+      popd >> /dev/null || exit 1
+      ;;
+
+    *)
+      echo " unsure how to unpack ${filename}"
+    esac
+  done
+}
+
+pack() {
+  for n in "$@"; do
+    # If the unpacked versino was passed, map back to the packed one.
+    if echo "$n" | grep 'unpacked/*$' > /dev/null; then
+      n="$(echo $n | sed 's/-unpacked\/*$//g')"
+    fi
+    echo " => $n"
+    local filename="$(pwd)/$n"
+    local unpacked_filename="${filename}-unpacked"
+
+    if ! [ -d "${unpacked_filename}" ]; then
+      continue
+    fi
+
+    case "${filename}" in
+    *.sketch)
+      mkdir -p /tmp/git-design$$
+      cp -R "${unpacked_filename}" /tmp/git-design$$
+      pushd "/tmp/git-design$$/$(basename "${unpacked_filename}")" >> /dev/null
+
+      # Remove the hashsum file, it's not needed in the export
+      rm -rf .hashsum
+
+      # Expand some sketch-specific json files
+      compress-json meta.json user.json pages/*.json
+
+      zip -r "$(basename "${filename}")" -- * >> /dev/null
+      mv "$(basename "${filename}")" "${filename}"
+
+      popd >> /dev/null || exit 1
+      rm -rf /tmp/git-design$$
+      ;;
+
+    *.studio)
+      mkdir -p /tmp/git-design$$
+      cp -R "${unpacked_filename}" "/tmp/git-design$$"
+      pushd "/tmp/git-design$$/$(basename ${unpacked_filename})" >> /dev/null
+
+      rm -rf .hashsum
+      compress-json metadata.json settings.json snapshot.json
+
+      zip -r "$(basename "${filename}")" -- * >> /dev/null
+      mv "$(basename "${filename}")" "${filename}"
+
+      popd >> /dev/null || exit 1
+      rm -rf /tmp/git-design$$
+      ;;
+    esac
+
+  done
+}
+
+init() {
+  # Add gitignore rules if not already added
+  if [ ! -f '.gitignore' -o -z "$(cat .gitignore | grep '# git-design')" ]; then
+    echo "# git-design" >> .gitignore
+    echo "*.sketch" >> .gitignore
+    echo "*.studio" >> .gitignore
+  fi
+
+  echo -e "#!/bin/bash\nexec $0 pre-commit"  > .git/hooks/pre-commit
+
+  echo "initialized git-design; please commit .gitignore!"
+}
+
+staged-unpacked-files() {
+  git status --porcelain
+}
+
+pre-commit() {
+  for line in $(git status --porcelain | sed 's/ /-/g'); do
+    echo "${line}"
+    case "${line}" in
+      A--*.sketch-unpacked*)
+        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
+      M--*.sketch-unpacked*)
+        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
+      -M-*.sketch-unpacked*)
+        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
+
+      A--*.studio-unpacked*)
+        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
+      M--*.studio-unpacked*)
+        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
+      -M-*.studio-unpacked*)
+        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
+    esac
+  done
+}
+
+post-checkout() {
+  pack *.sketch
+  pack *.studio
+}
+
+case $1 in
+pack)
+  shift 1
+  pack $@
+  ;;
+unpack)
+  shift 1
+  unpack $@
+  ;;
+pre-commit) pre-commit ;;
+post-checkout) pre-commit ;;
+init) init ;;
+esac

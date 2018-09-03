@@ -2,6 +2,8 @@
 # vim: set syntax=sh :
 set +exo pipefail
 
+# Take a list of json files, and compress each before copying into the archive.
+# ie, compress-json meta.json user.json
 compress-json() {
   for file in "$@"; do
     local hashsum="$(echo "${file}" | md5sum | awk '{ print $1 }')"
@@ -10,6 +12,8 @@ compress-json() {
     mv "/tmp/git-design$$/${hashsum}" "${file}"
   done
 }
+# Take a list of json files, and decompress each right after being unpacked from the archive.
+# ie, decompress-json meta.json user.json
 decompress-json() {
   for file in "$@"; do
     local hashsum="$(echo ${file} | md5sum | awk '{ print $1 }')"
@@ -128,48 +132,6 @@ pack() {
   done
 }
 
-init() {
-  # Add gitignore rules if not already added
-  if [ ! -f '.gitignore' -o -z "$(cat .gitignore | grep '# git-design')" ]; then
-    echo "# git-design" >> .gitignore
-    echo "*.sketch" >> .gitignore
-    echo "*.studio" >> .gitignore
-  fi
-
-  echo -e "#!/bin/bash\nexec $0 pre-commit"  > .git/hooks/pre-commit
-
-  echo "initialized git-design; please commit .gitignore!"
-}
-
-staged-unpacked-files() {
-  git status --porcelain
-}
-
-pre-commit() {
-  for line in $(git status --porcelain | sed 's/ /-/g'); do
-    echo "${line}"
-    case "${line}" in
-      A--*.sketch-unpacked*)
-        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
-      M--*.sketch-unpacked*)
-        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
-      -M-*.sketch-unpacked*)
-        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
-
-      A--*.studio-unpacked*)
-        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
-      M--*.studio-unpacked*)
-        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
-      -M-*.studio-unpacked*)
-        unpack "$(echo "${filename:3}" | sed 's/-unpacked.+$//g')" ;;
-    esac
-  done
-}
-
-post-checkout() {
-  pack *.sketch
-  pack *.studio
-}
 
 case $1 in
 pack)
@@ -180,7 +142,8 @@ unpack)
   shift 1
   unpack $@
   ;;
-pre-commit) pre-commit ;;
-post-checkout) pre-commit ;;
-init) init ;;
+*)
+  echo "git-design is a way to manage binary design assets in git, built by Ryan Gaus <rgaus.net>"
+  echo "Read documentation at https://github.com/1egoman/git-design"
+  ;;
 esac
